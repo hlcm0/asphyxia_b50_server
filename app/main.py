@@ -1,4 +1,5 @@
 import re
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -8,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app.database import count_uploads, get_latest_upload, initialize_database, insert_upload
 from app.models import ApiResponse, B50UploadRequest, LatestB50Response
+from app.providers.maomani.router import router as maomani_router
 
 
 QQ_PATTERN = re.compile(r"^[0-9]{5,12}$")
@@ -20,6 +22,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="SDVX B50 Server", version="1.0.0", lifespan=lifespan)
+
+if os.environ.get("ENABLE_MAOMANI_PROVIDER", "1") == "1":
+    app.include_router(maomani_router)
 
 
 @app.exception_handler(RequestValidationError)

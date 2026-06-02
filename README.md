@@ -59,3 +59,30 @@ GET /api/sdvx/b50/count/{qq}
 ```
 
 This is useful for verifying that upload history is being retained.
+
+### Fetch B50 from Maomani
+
+```http
+POST /api/sdvx/b50/providers/maomani
+Content-Type: application/json
+```
+
+Request:
+
+```json
+{
+  "cardNo": "E004B2A9A40593F8"
+}
+```
+
+The provider queries `maomani.cn:573`, converts SDVX 7 score records to a B50
+payload, and returns the same short clear-lamp labels used by uploaded B50 data
+(`ND`, `C`, `EC`, `HC`, `MC`, `UC`, `PUC`). Song metadata fields that require a
+local music database are returned as empty strings; use `difficultyNum` with the
+client's local music database to resolve title, difficulty label, and level.
+
+Disable this provider with:
+
+```bash
+ENABLE_MAOMANI_PROVIDER=0 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```

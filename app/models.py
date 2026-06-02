@@ -15,6 +15,7 @@ class B50Card(BaseModel):
 
     rank: int
     mid: int
+    difficultyNum: int | None = None
     title: str
     difficultyLabel: str
     level: str
