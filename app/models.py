@@ -30,7 +30,7 @@ class UploadClientInfo(BaseModel):
 
 
 class B50UploadRequest(BaseModel):
-    schemaVersion: Literal[1]
+    schemaVersion: Literal[1, 2]
     game: Literal["sdvx"]
     version: Literal[7]
     qq: str = Field(pattern=r"^[0-9]{5,12}$")
@@ -39,6 +39,10 @@ class B50UploadRequest(BaseModel):
     generatedAt: str
     cards: list[B50Card]
     client: UploadClientInfo
+    serverUrl: str | None = None
+    cardNo: str | None = None
+    password: str | None = None
+    pcbid: str | None = None
 
     @field_validator("cards")
     @classmethod

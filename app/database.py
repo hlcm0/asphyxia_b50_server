@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from app.crypto import encrypt_cloud_fields
 from app.models import B50UploadRequest
 
 
@@ -51,7 +52,7 @@ def initialize_database() -> None:
 
 
 def insert_upload(payload: B50UploadRequest) -> int:
-    payload_json = payload.model_dump_json()
+    payload_json = encrypt_cloud_fields(payload.model_dump_json())
     with connect() as connection:
         cursor = connection.execute(
             """
