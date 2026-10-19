@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.database import count_uploads, get_latest_upload, initialize_database, insert_upload
 from app.models import (
+    SUPPORTED_GAMES,
     ApiResponse,
     B50UploadRequest,
     DataResponse,
@@ -51,15 +52,26 @@ def upload_b50(payload: B50UploadRequest) -> ApiResponse:
     return ApiResponse(ok=True, message="Cloud upload complete.")
 
 
-@app.get("/api/sdvx/b50/latest/{qq}", response_model=LatestB50Response)
-def latest_b50(qq: str) -> LatestB50Response:
+def _invalid_player(qq: str, game: str, version: int) -> JSONResponse | None:
     if not QQ_PATTERN.fullmatch(qq):
         return JSONResponse(
             status_code=400,
             content={"ok": False, "message": "invalid qq"},
         )
+    if (game, version) not in SUPPORTED_GAMES:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "message": "unsupported game and version"},
+        )
+    return None
 
-    payload = get_latest_upload(qq)
+
+@app.get("/api/sdvx/b50/latest/{qq}", response_model=LatestB50Response)
+def latest_b50(qq: str, game: str = "sdvx", version: int = 7) -> LatestB50Response:
+    if (error := _invalid_player(qq, game, version)) is not None:
+        return error
+
+    payload = get_latest_upload(qq, game, version)
     if payload is None:
         return JSONResponse(
             status_code=404,
@@ -70,14 +82,11 @@ def latest_b50(qq: str) -> LatestB50Response:
 
 
 @app.get("/api/sdvx/b50/count/{qq}", response_model=dict[str, int | bool | str])
-def upload_count(qq: str) -> dict[str, int | bool | str]:
-    if not QQ_PATTERN.fullmatch(qq):
-        return JSONResponse(
-            status_code=400,
-            content={"ok": False, "message": "invalid qq"},
-        )
+def upload_count(qq: str, game: str = "sdvx", version: int = 7) -> dict[str, int | bool | str]:
+    if (error := _invalid_player(qq, game, version)) is not None:
+        return error
 
-    return {"ok": True, "message": "ok", "count": count_uploads(qq)}
+    return {"ok": True, "message": "ok", "count": count_uploads(qq, game, version)}
 
 
 @app.post("/api/sdvx/scores", response_model=ScoreUploadResponse)
@@ -91,16 +100,15 @@ def upload_scores(payload: ScoreUploadRequest) -> ScoreUploadResponse:
 @app.get("/api/sdvx/scores/{qq}", response_model=DataResponse)
 def player_scores(
     qq: str,
+    game: str = "sdvx",
+    version: int = 7,
     mid: int | None = Query(default=None, ge=0),
     type: int | None = Query(default=None, ge=0, le=5),
 ) -> DataResponse:
-    if not QQ_PATTERN.fullmatch(qq):
-        return JSONResponse(
-            status_code=400,
-            content={"ok": False, "message": "invalid qq"},
-        )
+    if (error := _invalid_player(qq, game, version)) is not None:
+        return error
 
-    data = get_scores(qq, mid, type)
+    data = get_scores(qq, game, version, mid, type)
     if data is None:
         return JSONResponse(
             status_code=404,
@@ -113,14 +121,14 @@ def player_scores(
 @app.get("/api/sdvx/plays/{qq}", response_model=DataResponse)
 def player_plays(
     qq: str,
+    game: str = "sdvx",
+    version: int = 7,
     mid: int | None = Query(default=None, ge=0),
     type: int | None = Query(default=None, ge=0, le=5),
     limit: int = Query(default=50, ge=1, le=500),
 ) -> DataResponse:
-    if not QQ_PATTERN.fullmatch(qq):
-        return JSONResponse(
-            status_code=400,
-            content={"ok": False, "message": "invalid qq"},
-        )
+    if (error := _invalid_player(qq, game, version)) is not None:
+        return error
 
-    return DataResponse(ok=True, message="ok", data={"plays": get_plays(qq, mid, type, limit)})
+    plays = get_plays(qq, game, version, mid, type, limit)
+    return DataResponse(ok=True, message="ok", data={"plays": plays})

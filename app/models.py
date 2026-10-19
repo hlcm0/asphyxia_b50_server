@@ -3,6 +3,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+# (game, version) pairs the server stores. "sdvx-plus" is SOUND VOLTEX PLUS, a fan build of the 6th game with
+# custom charts whose music ids mean different songs than the official ones, so it is kept apart.
+SUPPORTED_GAMES = {("sdvx", 7), ("sdvx", 6), ("sdvx-plus", 6)}
+GameName = Literal["sdvx", "sdvx-plus"]
+GameVersion = Literal[6, 7]
+
+
 class PlayerSummary(BaseModel):
     refid: str
     name: str
@@ -31,8 +38,8 @@ class UploadClientInfo(BaseModel):
 
 class B50UploadRequest(BaseModel):
     schemaVersion: Literal[1, 2]
-    game: Literal["sdvx"]
-    version: Literal[7]
+    game: GameName
+    version: GameVersion
     qq: str = Field(pattern=r"^[0-9]{5,12}$")
     player: PlayerSummary
     totalVf: str
@@ -50,6 +57,12 @@ class B50UploadRequest(BaseModel):
         if not value:
             raise ValueError("cards must not be empty")
         return value
+
+    @model_validator(mode="after")
+    def game_must_be_supported(self) -> "B50UploadRequest":
+        if (self.game, self.version) not in SUPPORTED_GAMES:
+            raise ValueError("unsupported game and version")
+        return self
 
 
 class ScorePlayer(BaseModel):
@@ -96,8 +109,9 @@ class ScorePlay(ScoreRecord):
 
 class ScoreUploadRequest(BaseModel):
     schemaVersion: Literal[1]
-    game: Literal["sdvx"]
-    version: Literal[7]
+    game: GameName
+    # Clear types are sent as the game numbers them; version 6 is converted to the version 7 order on arrival.
+    version: GameVersion
     qq: str = Field(pattern=r"^[0-9]{5,12}$")
     player: ScorePlayer
     records: list[ScoreRecord] = Field(default_factory=list, max_length=50_000)
@@ -106,6 +120,8 @@ class ScoreUploadRequest(BaseModel):
 
     @model_validator(mode="after")
     def must_carry_scores(self) -> "ScoreUploadRequest":
+        if (self.game, self.version) not in SUPPORTED_GAMES:
+            raise ValueError("unsupported game and version")
         if not self.records and not self.plays:
             raise ValueError("records and plays must not both be empty")
         return self

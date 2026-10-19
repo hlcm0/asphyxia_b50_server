@@ -1,3 +1,4 @@
+import sqlite3
 from collections.abc import Iterator
 
 import pytest
@@ -52,11 +53,13 @@ def play(uid: str, mid: int, chart_type: int = 4, score: int = 9_950_000, **fiel
     }
 
 
-def upload(records: list[dict] = (), plays: list[dict] = ()) -> dict:
+def upload(
+    records: list[dict] = (), plays: list[dict] = (), game: str = "sdvx", version: int = 7
+) -> dict:
     return {
         "schemaVersion": 1,
-        "game": "sdvx",
-        "version": 7,
+        "game": game,
+        "version": version,
         "qq": QQ,
         "player": {"refid": "REFID", "name": "PLAYER", "sdvxId": 12345678},
         "records": list(records),
@@ -75,6 +78,11 @@ def test_volforce_matches_known_values() -> None:
     assert calculate_volforce(200, 10_000_000, 6, 10) == 462  # 20 PUC S
     assert calculate_volforce(185, 9_900_000, 5, 9) == 396
     assert calculate_volforce(180, 9_000_000, 0, 9) == 0  # no clear factor
+    # EXCEED GEAR examples from BEMANIWiki: Lv20 PUC 462, Lv16 S effective 332; UC is 1.05 there.
+    assert calculate_volforce(200, 10_000_000, 6, 10, version=6) == 462
+    assert calculate_volforce(160, 9_900_000, 2, 10, version=6) == 332
+    assert calculate_volforce(200, 9_950_000, 5, 10, version=6) == 438  # 20 * .995 * 1.05 * 1.05 * 20
+    assert calculate_volforce(200, 9_950_000, 5, 10, version=7) == 442  # 1.06 in SDVX 7
 
 
 def test_snapshot_builds_b50_once(client: TestClient) -> None:
@@ -175,6 +183,7 @@ def test_scores_filters_and_errors(client: TestClient) -> None:
         upload([record(1, chart_type=6)]),
         upload([record(1, score=10_000_001)]),
         upload(plays=[play("short", 1)]),
+        upload([record(1)], game="sdvx-plus", version=7),
     ],
 )
 def test_invalid_score_upload_returns_422(client: TestClient, body: dict) -> None:
@@ -182,3 +191,76 @@ def test_invalid_score_upload_returns_422(client: TestClient, body: dict) -> Non
 
     assert response.status_code == 422
     assert response.json() == {"ok": False, "message": "invalid request body"}
+
+
+PLUS = {"game": "sdvx-plus", "version": 6}
+
+
+def test_games_are_kept_apart(client: TestClient) -> None:
+    # SOUND VOLTEX PLUS music id 1 is a different song from SDVX 7 music id 1.
+    client.post("/api/sdvx/scores", json=upload([record(1, title="ALBIDA")]))
+    client.post("/api/sdvx/scores", json=upload([record(1, title="PARANOiA (kskst mix)", clear=2)], **PLUS))
+
+    assert [r["title"] for r in scores(client)] == ["ALBIDA"]
+    assert [r["title"] for r in scores(client, **PLUS)] == ["PARANOiA (kskst mix)"]
+    sdvx = client.get(f"/api/sdvx/b50/latest/{QQ}").json()["data"]
+    plus = client.get(f"/api/sdvx/b50/latest/{QQ}", params=PLUS).json()["data"]
+    assert (sdvx["game"], sdvx["version"], sdvx["cards"][0]["title"]) == ("sdvx", 7, "ALBIDA")
+    assert (plus["game"], plus["version"], plus["cards"][0]["title"]) == ("sdvx-plus", 6, "PARANOiA (kskst mix)")
+    assert client.get(f"/api/sdvx/b50/count/{QQ}").json()["count"] == 1
+    assert client.get(f"/api/sdvx/b50/count/{QQ}", params=PLUS).json()["count"] == 1
+    assert client.get(f"/api/sdvx/scores/{QQ}", params={"game": "sdvx", "version": 6}).status_code == 404
+    assert client.get(f"/api/sdvx/scores/{QQ}", params={"game": "sdvx-plus", "version": 7}).status_code == 400
+
+
+def test_exceed_gear_clear_types_are_normalized(client: TestClient) -> None:
+    # EXCEED GEAR: 4 UC, 5 PUC, 6 MAXXIVE.
+    client.post("/api/sdvx/scores", json=upload([record(1, score=9_950_000, grade=10, clear=4, difnum=200)], **PLUS))
+    [best] = scores(client, **PLUS)
+    assert (best["clear"], best["clearLamp"], best["volforce"]) == (5, "UC", 438)  # UC 1.05 in EXCEED GEAR
+
+    mxv = play("play-0001", 1, score=9_900_000, clear=6, grade=10, difnum=200)
+    client.post("/api/sdvx/scores", json=upload(plays=[mxv], **PLUS))
+    [best] = scores(client, **PLUS)
+    assert (best["clear"], best["score"]) == (5, 9_950_000)  # MAXXIVE is below UC
+    [stored] = client.get(f"/api/sdvx/plays/{QQ}", params=PLUS).json()["data"]["plays"]
+    assert (stored["clear"], stored["clearRaw"]) == (4, 6)
+
+    client.post("/api/sdvx/scores", json=upload(plays=[play("play-0002", 1, clear=5, difnum=200)], **PLUS))
+    assert scores(client, **PLUS)[0]["clearLamp"] == "PUC"
+
+
+def test_tables_from_before_games_are_migrated(tmp_path, monkeypatch) -> None:
+    database = tmp_path / "b50.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE sdvx_players (qq TEXT PRIMARY KEY, refid TEXT NOT NULL, name TEXT NOT NULL,
+                sdvx_id INTEGER NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE sdvx_scores (qq TEXT NOT NULL, mid INTEGER NOT NULL, type INTEGER NOT NULL,
+                score INTEGER NOT NULL, exscore INTEGER NOT NULL, clear INTEGER NOT NULL, grade INTEGER NOT NULL,
+                volforce INTEGER NOT NULL, button_rate INTEGER NOT NULL, long_rate INTEGER NOT NULL,
+                vol_rate INTEGER NOT NULL, title TEXT, difficulty_label TEXT, difnum INTEGER, max_chain INTEGER,
+                s_critical INTEGER, critical INTEGER, near INTEGER, error INTEGER, best_played_at TEXT,
+                play_count INTEGER NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (qq, mid, type));
+            CREATE TABLE sdvx_plays (id INTEGER PRIMARY KEY AUTOINCREMENT, qq TEXT NOT NULL, uid TEXT NOT NULL,
+                mid INTEGER NOT NULL, type INTEGER NOT NULL, score INTEGER NOT NULL, exscore INTEGER NOT NULL,
+                clear INTEGER NOT NULL, grade INTEGER NOT NULL, max_chain INTEGER NOT NULL,
+                s_critical INTEGER NOT NULL, critical INTEGER NOT NULL, near INTEGER NOT NULL,
+                error INTEGER NOT NULL, played_at TEXT NOT NULL, payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), UNIQUE (qq, uid));
+            CREATE INDEX idx_sdvx_plays_chart ON sdvx_plays (qq, mid, type, id DESC);
+            INSERT INTO sdvx_players VALUES ('123456789', 'REFID', 'PLAYER', 1, 'then');
+            INSERT INTO sdvx_scores VALUES ('123456789', 7, 4, 9000000, 1, 2, 3, 300, 0, 0, 0, 'Old', 'MXM', 180,
+                NULL, NULL, NULL, NULL, NULL, NULL, 0, 'then');
+            INSERT INTO sdvx_plays (qq, uid, mid, type, score, exscore, clear, grade, max_chain, s_critical,
+                critical, near, error, played_at, payload_json)
+                VALUES ('123456789', 'play-0001', 7, 4, 9000000, 1, 2, 3, 0, 0, 0, 0, 0, 'then', '{"uid": "play-0001"}');
+            """
+        )
+    monkeypatch.setenv("B50_DATABASE_PATH", str(database))
+    with TestClient(app) as client:
+        assert [(r["mid"], r["title"]) for r in scores(client)] == [(7, "Old")]
+        plays = client.get(f"/api/sdvx/plays/{QQ}", params={"mid": 7}).json()["data"]["plays"]
+        assert [p["uid"] for p in plays] == ["play-0001"]
+        assert client.post("/api/sdvx/scores", json=upload([record(7, score=9_500_000)])).json()["records"] == 1

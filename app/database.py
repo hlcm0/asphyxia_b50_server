@@ -49,78 +49,101 @@ def initialize_database() -> None:
             ON b50_uploads (qq, game, version, id DESC)
             """
         )
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sdvx_players (
-                qq TEXT PRIMARY KEY,
-                refid TEXT NOT NULL,
-                name TEXT NOT NULL,
-                sdvx_id INTEGER NOT NULL,
-                updated_at TEXT NOT NULL
+        _create_score_tables(connection)
+
+
+# Kept per QQ, game and version (see models.SUPPORTED_GAMES). sdvx_scores has one row per chart: the best
+# score, EX score, clear and grade seen so far; its judgement columns belong to the play that set `score` and
+# stay NULL when that play was not captured. sdvx_plays keeps every play.
+SCORE_TABLES = {
+    "sdvx_players": """
+        CREATE TABLE sdvx_players (
+            qq TEXT NOT NULL,
+            game TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            refid TEXT NOT NULL,
+            name TEXT NOT NULL,
+            sdvx_id INTEGER NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (qq, game, version)
+        )
+    """,
+    "sdvx_scores": """
+        CREATE TABLE sdvx_scores (
+            qq TEXT NOT NULL,
+            game TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            mid INTEGER NOT NULL,
+            type INTEGER NOT NULL,
+            score INTEGER NOT NULL,
+            exscore INTEGER NOT NULL,
+            clear INTEGER NOT NULL,
+            grade INTEGER NOT NULL,
+            volforce INTEGER NOT NULL,
+            button_rate INTEGER NOT NULL,
+            long_rate INTEGER NOT NULL,
+            vol_rate INTEGER NOT NULL,
+            title TEXT,
+            difficulty_label TEXT,
+            difnum INTEGER,
+            max_chain INTEGER,
+            s_critical INTEGER,
+            critical INTEGER,
+            near INTEGER,
+            error INTEGER,
+            best_played_at TEXT,
+            play_count INTEGER NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (qq, game, version, mid, type)
+        )
+    """,
+    "sdvx_plays": """
+        CREATE TABLE sdvx_plays (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            qq TEXT NOT NULL,
+            game TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            uid TEXT NOT NULL,
+            mid INTEGER NOT NULL,
+            type INTEGER NOT NULL,
+            score INTEGER NOT NULL,
+            exscore INTEGER NOT NULL,
+            clear INTEGER NOT NULL,
+            grade INTEGER NOT NULL,
+            max_chain INTEGER NOT NULL,
+            s_critical INTEGER NOT NULL,
+            critical INTEGER NOT NULL,
+            near INTEGER NOT NULL,
+            error INTEGER NOT NULL,
+            played_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            UNIQUE (qq, uid)
+        )
+    """,
+}
+
+
+def _create_score_tables(connection: sqlite3.Connection) -> None:
+    for name, ddl in SCORE_TABLES.items():
+        columns = [row[1] for row in connection.execute(f"PRAGMA table_info({name})")]
+        if not columns:
+            connection.execute(ddl)
+        elif "game" not in columns:
+            # Created before games were told apart: everything in it is SDVX 7.
+            connection.execute(f"ALTER TABLE {name} RENAME TO {name}_old")
+            connection.execute(ddl)
+            old = ", ".join(columns)
+            connection.execute(
+                f"INSERT INTO {name} (game, version, {old}) SELECT 'sdvx', 7, {old} FROM {name}_old"
             )
-            """
-        )
-        # One row per chart: the best score, EX score, clear and grade seen so far. The judgement
-        # columns belong to the play that set `score` and stay NULL when that play was not captured.
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sdvx_scores (
-                qq TEXT NOT NULL,
-                mid INTEGER NOT NULL,
-                type INTEGER NOT NULL,
-                score INTEGER NOT NULL,
-                exscore INTEGER NOT NULL,
-                clear INTEGER NOT NULL,
-                grade INTEGER NOT NULL,
-                volforce INTEGER NOT NULL,
-                button_rate INTEGER NOT NULL,
-                long_rate INTEGER NOT NULL,
-                vol_rate INTEGER NOT NULL,
-                title TEXT,
-                difficulty_label TEXT,
-                difnum INTEGER,
-                max_chain INTEGER,
-                s_critical INTEGER,
-                critical INTEGER,
-                near INTEGER,
-                error INTEGER,
-                best_played_at TEXT,
-                play_count INTEGER NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (qq, mid, type)
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sdvx_plays (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                qq TEXT NOT NULL,
-                uid TEXT NOT NULL,
-                mid INTEGER NOT NULL,
-                type INTEGER NOT NULL,
-                score INTEGER NOT NULL,
-                exscore INTEGER NOT NULL,
-                clear INTEGER NOT NULL,
-                grade INTEGER NOT NULL,
-                max_chain INTEGER NOT NULL,
-                s_critical INTEGER NOT NULL,
-                critical INTEGER NOT NULL,
-                near INTEGER NOT NULL,
-                error INTEGER NOT NULL,
-                played_at TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-                UNIQUE (qq, uid)
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_sdvx_plays_chart
-            ON sdvx_plays (qq, mid, type, id DESC)
-            """
-        )
+            connection.execute(f"DROP TABLE {name}_old")
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_sdvx_plays_chart
+        ON sdvx_plays (qq, game, version, mid, type, id DESC)
+        """
+    )
 
 
 def insert_upload(payload: B50UploadRequest) -> int:
@@ -158,17 +181,17 @@ def insert_upload(payload: B50UploadRequest) -> int:
         return int(cursor.lastrowid)
 
 
-def get_latest_upload(qq: str) -> dict[str, Any] | None:
+def get_latest_upload(qq: str, game: str = "sdvx", version: int = 7) -> dict[str, Any] | None:
     with connect() as connection:
         row = connection.execute(
             """
             SELECT payload_json
             FROM b50_uploads
-            WHERE qq = ? AND game = 'sdvx' AND version = 7
+            WHERE qq = ? AND game = ? AND version = ?
             ORDER BY id DESC
             LIMIT 1
             """,
-            (qq,),
+            (qq, game, version),
         ).fetchone()
 
     if row is None:
@@ -177,15 +200,15 @@ def get_latest_upload(qq: str) -> dict[str, Any] | None:
     return json.loads(row["payload_json"])
 
 
-def count_uploads(qq: str) -> int:
+def count_uploads(qq: str, game: str = "sdvx", version: int = 7) -> int:
     with connect() as connection:
         row = connection.execute(
             """
             SELECT COUNT(*) AS upload_count
             FROM b50_uploads
-            WHERE qq = ? AND game = 'sdvx' AND version = 7
+            WHERE qq = ? AND game = ? AND version = ?
             """,
-            (qq,),
+            (qq, game, version),
         ).fetchone()
 
     return int(row["upload_count"])

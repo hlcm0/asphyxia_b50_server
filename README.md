@@ -50,7 +50,9 @@ Each upload inserts a new row into `b50_uploads`; older uploads are preserved.
 GET /api/sdvx/b50/latest/{qq}
 ```
 
-Returns the newest uploaded B50 payload for the given QQ number.
+Returns the newest uploaded B50 payload for the given QQ number. Add `?game=sdvx-plus&version=6` (or any
+other supported game, see below) for that game's B50; the default is `game=sdvx&version=7`. The same
+parameters work on `/api/sdvx/b50/count/{qq}`.
 
 ### Count Uploads by QQ
 
@@ -67,7 +69,15 @@ POST /api/sdvx/scores
 Content-Type: application/json
 ```
 
-Stores a player's full score list, keyed by QQ, mid and chart type (0 NOV … 5 ULT).
+Stores a player's full score list, keyed by QQ, game, version, mid and chart type (0 NOV … 5 ULT).
+
+Supported `game` / `version` pairs, each stored separately with its own B50:
+
+| game | version | |
+|---|---|---|
+| `sdvx` | 7 | SOUND VOLTEX ∇ |
+| `sdvx` | 6 | SOUND VOLTEX EXCEED GEAR |
+| `sdvx-plus` | 6 | SOUND VOLTEX PLUS (EXCEED GEAR with custom charts; its music ids are different songs) |
 
 ```json
 {
@@ -88,8 +98,12 @@ Stores a player's full score list, keyed by QQ, mid and chart type (0 NOV … 5 
   At least one of the two lists must be non-empty.
 - Each chart keeps its best score, EX score, clear and grade. The rates and judgement counts come from the
   play that set the best score; they are `null` when that play only arrived as a record.
-- `difnum` is the `music_db.xml` level times 10. With it the server computes the chart's volforce like the
-  desktop tool; without it the game's `volforce` is kept and the chart is left out of the B50.
+- `difnum` is the level times 10 (185 = 18.5). With it the server computes the chart's volforce; without it
+  the game's `volforce` is kept and the chart is left out of the B50. Volforce is
+  floor(level × score / 10M × grade × clear × 20): version 7 uses the desktop tool's factors, version 6 the
+  EXCEED GEAR ones (UC 1.05 instead of 1.06).
+- `clear` is sent as the game numbers it. Version 6 clear types (4 UC, 5 PUC, 6 MAXXIVE) are converted to
+  the version 7 order (4 MAXXIVE, 5 UC, 6 PUC) on arrival; a converted play keeps the original as `clearRaw`.
 - Plays are deduplicated by `uid`, so a client can safely resend after a failure.
 - After every upload the B50 is rebuilt from the stored records. When it differs from the latest one, it is
   written to `b50_uploads`, so `GET /api/sdvx/b50/latest/{qq}` returns it.
@@ -103,16 +117,17 @@ The response reports how many charts changed, how many plays were new, and wheth
 ### Get Scores by QQ
 
 ```http
-GET /api/sdvx/scores/{qq}?mid=1001&type=4
+GET /api/sdvx/scores/{qq}?game=sdvx&version=7&mid=1001&type=4
 ```
 
-Returns `{"player": …, "records": […]}`. `mid` and `type` are optional filters. Each record has the stored
+Returns `{"game", "version", "player": …, "records": […]}`. `mid` and `type` are optional filters. Each record has the stored
 fields plus `level`, `clearLamp`, `singleVf`, `judgements` (or `null`), `bestPlayedAt` and `playCount`.
 
 ### Get Plays by QQ
 
 ```http
-GET /api/sdvx/plays/{qq}?mid=1001&type=4&limit=50
+GET /api/sdvx/plays/{qq}?game=sdvx&version=7&mid=1001&type=4&limit=50
 ```
 
-Returns `{"plays": […]}`, newest first, as uploaded plus `id` and `receivedAt`. `limit` is 1 to 500.
+Returns `{"plays": […]}`, newest first, as uploaded plus `id` and `receivedAt`. `limit` is 1 to 500. `game`
+and `version` default to `sdvx` and 7 on both endpoints.
