@@ -49,6 +49,78 @@ def initialize_database() -> None:
             ON b50_uploads (qq, game, version, id DESC)
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sdvx_players (
+                qq TEXT PRIMARY KEY,
+                refid TEXT NOT NULL,
+                name TEXT NOT NULL,
+                sdvx_id INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        # One row per chart: the best score, EX score, clear and grade seen so far. The judgement
+        # columns belong to the play that set `score` and stay NULL when that play was not captured.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sdvx_scores (
+                qq TEXT NOT NULL,
+                mid INTEGER NOT NULL,
+                type INTEGER NOT NULL,
+                score INTEGER NOT NULL,
+                exscore INTEGER NOT NULL,
+                clear INTEGER NOT NULL,
+                grade INTEGER NOT NULL,
+                volforce INTEGER NOT NULL,
+                button_rate INTEGER NOT NULL,
+                long_rate INTEGER NOT NULL,
+                vol_rate INTEGER NOT NULL,
+                title TEXT,
+                difficulty_label TEXT,
+                difnum INTEGER,
+                max_chain INTEGER,
+                s_critical INTEGER,
+                critical INTEGER,
+                near INTEGER,
+                error INTEGER,
+                best_played_at TEXT,
+                play_count INTEGER NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (qq, mid, type)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sdvx_plays (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                qq TEXT NOT NULL,
+                uid TEXT NOT NULL,
+                mid INTEGER NOT NULL,
+                type INTEGER NOT NULL,
+                score INTEGER NOT NULL,
+                exscore INTEGER NOT NULL,
+                clear INTEGER NOT NULL,
+                grade INTEGER NOT NULL,
+                max_chain INTEGER NOT NULL,
+                s_critical INTEGER NOT NULL,
+                critical INTEGER NOT NULL,
+                near INTEGER NOT NULL,
+                error INTEGER NOT NULL,
+                played_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                UNIQUE (qq, uid)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_sdvx_plays_chart
+            ON sdvx_plays (qq, mid, type, id DESC)
+            """
+        )
 
 
 def insert_upload(payload: B50UploadRequest) -> int:
